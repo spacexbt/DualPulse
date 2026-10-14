@@ -1,0 +1,41 @@
+# Build output
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+*.ilk
+
+# Local user settings / runtime data (DualPulse stores these in %APPDATA%, never in the repo)
+settings.ini
+*.ini.bak
+*.log
+
+# Vendor software dumps and reverse-engineering scratch files: never publish
+res/
+dumps/
+*.dat
+*.bin
+*.cuebmf
+probe-output*.txt
+
+# Secrets and personal environment
+.env
+.env.*
+*.pfx
+*.p12
+*.snk
+*.key
+*.pem
+secrets*.json
+
+# Editors, OS and assistant tooling
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+.claude/
+Thumbs.db
+desktop.ini
+.DS_Store
