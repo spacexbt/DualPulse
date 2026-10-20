@@ -20,14 +20,15 @@ namespace DualPulse
         }
     }
 
-    // One opened HID top-level collection. Interrupt reports go through an overlapped stream,
-    // feature reports through HidD_Get/SetFeature, and the HID parser is available via Preparsed.
+    // One opened HID top-level collection. Interrupt reports use raw overlapped ReadFile/WriteFile
+    // (every call has a timeout and is safely cancelled), feature reports use HidD_Get/SetFeature,
+    // and the HID parser is available via Preparsed.
     public class HidDevice : IDisposable
     {
         public readonly HidInfo Info;
         public IntPtr Preparsed { get; private set; }
         SafeFileHandle handle;
-        FileStream stream;
+        readonly object ioLock = new object();
 
         public HidDevice(HidInfo info)
         {
@@ -38,29 +39,65 @@ namespace DualPulse
             if (handle.IsInvalid) throw new IOException("Cannot open HID device (error " + Marshal.GetLastWin32Error() + ")");
             IntPtr pp;
             if (Native.HidD_GetPreparsedData(handle, out pp)) Preparsed = pp;
-            if (info.InLen > 0 || info.OutLen > 0) stream = new FileStream(handle, FileAccess.ReadWrite, 4096, true);
         }
 
         // data[0] is the report id; the buffer is padded to the output report length.
-        public void Write(byte[] data)
+        public void Write(byte[] data, int timeoutMs = 500)
         {
             byte[] buf = new byte[Math.Max(Info.OutLen, data.Length)];
             Array.Copy(data, buf, data.Length);
-            stream.Write(buf, 0, buf.Length);
+            int n = Io(true, buf, timeoutMs);
+            if (n == -1) throw new TimeoutException("HID write timed out");
+            if (n < 0) throw new IOException("HID write failed (error " + (-n - 2) + ")");
         }
 
+        // Returns null on timeout. Throws if the device is gone.
         public byte[] Read(int timeoutMs)
         {
             byte[] buf = new byte[Info.InLen];
-            IAsyncResult ar = stream.BeginRead(buf, 0, buf.Length, null, null);
-            if (!ar.AsyncWaitHandle.WaitOne(timeoutMs))
+            int n = Io(false, buf, timeoutMs);
+            if (n == -1) return null;
+            if (n < 0) throw new IOException("HID read failed (error " + (-n - 2) + ")");
+            return n == 0 ? null : buf;
+        }
+
+        // Overlapped I/O with our own OVERLAPPED and event. On timeout the request is cancelled and
+        // GetOverlappedResult(wait) is used to make sure it has fully completed before the buffers are freed.
+        // Returns bytes transferred, -1 on timeout, or -(error + 2) on failure.
+        int Io(bool write, byte[] buf, int timeoutMs)
+        {
+            lock (ioLock)
             {
-                Native.CancelIoEx(handle, IntPtr.Zero);
-                try { stream.EndRead(ar); } catch { }
-                return null;
+                int ovSize = IntPtr.Size * 2 + 8 + IntPtr.Size;
+                IntPtr ov = Marshal.AllocHGlobal(ovSize), mem = Marshal.AllocHGlobal(buf.Length);
+                IntPtr ev = Native.CreateEvent(IntPtr.Zero, true, false, null);
+                try
+                {
+                    for (int i = 0; i < ovSize; i++) Marshal.WriteByte(ov, i, 0);
+                    Marshal.WriteIntPtr(ov, IntPtr.Size * 2 + 8, ev);
+                    if (write) Marshal.Copy(buf, 0, mem, buf.Length);
+                    bool ok = write ? Native.WriteFile(handle, mem, buf.Length, IntPtr.Zero, ov)
+                                    : Native.ReadFile(handle, mem, buf.Length, IntPtr.Zero, ov);
+                    int err = ok ? 0 : Marshal.GetLastWin32Error();
+                    if (!ok && err != Native.ERROR_IO_PENDING) return -(err + 2);
+                    int done;
+                    if (Native.WaitForSingleObject(ev, (uint)timeoutMs) != 0)
+                    {
+                        Native.CancelIoEx(handle, ov);
+                        Native.GetOverlappedResult(handle, ov, out done, true);
+                        return -1;
+                    }
+                    if (!Native.GetOverlappedResult(handle, ov, out done, false)) return -(Marshal.GetLastWin32Error() + 2);
+                    if (!write) Marshal.Copy(mem, buf, 0, Math.Min(done, buf.Length));
+                    return done;
+                }
+                finally
+                {
+                    Native.CloseHandle(ev);
+                    Marshal.FreeHGlobal(mem);
+                    Marshal.FreeHGlobal(ov);
+                }
             }
-            int n = stream.EndRead(ar);
-            return n <= 0 ? null : buf;
         }
 
         public bool GetFeature(byte[] buf) { return Native.HidD_GetFeature(handle, buf, buf.Length); }
@@ -68,7 +105,6 @@ namespace DualPulse
 
         public void Dispose()
         {
-            try { if (stream != null) stream.Dispose(); } catch { }
             try { if (handle != null) handle.Dispose(); } catch { }
             if (Preparsed != IntPtr.Zero) { Native.HidD_FreePreparsedData(Preparsed); Preparsed = IntPtr.Zero; }
         }
@@ -190,6 +226,13 @@ namespace DualPulse
         [DllImport("setupapi.dll", CharSet = CharSet.Auto, SetLastError = true)] public static extern bool SetupDiGetDeviceInterfaceDetail(IntPtr set, ref SP_DEVICE_INTERFACE_DATA d, IntPtr detail, int size, out int req, IntPtr devinfo);
         [DllImport("setupapi.dll")] public static extern bool SetupDiDestroyDeviceInfoList(IntPtr set);
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)] public static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr tmpl);
+        public const int ERROR_IO_PENDING = 997;
         [DllImport("kernel32.dll")] public static extern bool CancelIoEx(SafeFileHandle h, IntPtr ov);
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern bool ReadFile(SafeFileHandle h, IntPtr buf, int len, IntPtr read, IntPtr ov);
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern bool WriteFile(SafeFileHandle h, IntPtr buf, int len, IntPtr written, IntPtr ov);
+        [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetOverlappedResult(SafeFileHandle h, IntPtr ov, out int done, bool wait);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr CreateEvent(IntPtr sec, bool manual, bool initial, string name);
+        [DllImport("kernel32.dll")] public static extern uint WaitForSingleObject(IntPtr h, uint ms);
+        [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
     }
 }

@@ -138,6 +138,12 @@ namespace DualPulse
             string glyph = Dev.Kind == DeviceKind.Keyboard ? "⌨" : Dev.Kind == DeviceKind.Mouse ? "◉" : Dev.Kind == DeviceKind.Headset ? "♫" : "✦";
             TextRenderer.DrawText(g, glyph, Theme.F(13f), Rectangle.Round(ic), Theme.A2, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             TextRenderer.DrawText(g, Dev.Name, Theme.Bold, new Point((int)(60 * s), (int)(12 * s)), Theme.Text, TextFormatFlags.NoPrefix);
+            if (Dev.Problem != null)
+            {
+                TextRenderer.DrawText(g, Dev.Driver + "  •  " + Dev.Problem, Theme.Small, new Point((int)(60 * s), (int)(34 * s)), Theme.Bad, TextFormatFlags.NoPrefix);
+                using (var pen = new Pen(Theme.Border)) g.DrawLine(pen, 8 * s, Height - 1, Width - 8 * s, Height - 1);
+                return;
+            }
             var caps = new System.Collections.Generic.List<string> { Dev.Driver };
             if (Dev.HasLighting) caps.Add(Dev.LampCount + (Dev.LampCount == 1 ? " lamp" : " lamps"));
             if (Dev.Sensor != null) caps.Add("DPI " + Dev.Sensor.DpiMin + "–" + Dev.Sensor.DpiMax);

@@ -31,6 +31,16 @@ namespace DualPulse
                 if (claimed.Contains(info.Path)) continue;
                 CorsairDevice d = null;
                 try { d = new CorsairDevice(info); }
+                catch (TimeoutException)
+                {
+                    // the vendor interface exists but the firmware is not answering (not claimed, so it is retried)
+                    Model m;
+                    var kind = Models.TryGetValue(info.Pid, out m) ? m.Kind
+                        : (info.Product ?? "").IndexOf("mouse", StringComparison.OrdinalIgnoreCase) >= 0 ? DeviceKind.Mouse : DeviceKind.Keyboard;
+                    found.Add(new UnresponsiveDevice(info, kind, m != null ? m.Name : Names.Friendly(info.Product, info.Vid, kind),
+                        "Corsair protocol v2", "Not responding • unplug and replug the USB cable"));
+                    continue;
+                }
                 catch { d = null; }
                 if (d == null) continue;
                 claimed.Add(info.Path);
@@ -54,7 +64,8 @@ namespace DualPulse
         {
             dev = new HidDevice(info);
             var r = Cmd(0x02, 0x12, 0x00);   // read back the PID property to confirm the protocol
-            if (r == null || r[3] != 0) { dev.Dispose(); throw new InvalidOperationException("not a Corsair v2 device"); }
+            if (r == null) { dev.Dispose(); throw new TimeoutException("no response"); }
+            if (r[3] != 0) { dev.Dispose(); throw new InvalidOperationException("not a Corsair v2 device"); }
             Vid = info.Vid; Pid = info.Pid;
             CorsairDriver.Model m;
             if (CorsairDriver.Models.TryGetValue(Pid, out m))

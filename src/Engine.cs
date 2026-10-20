@@ -260,6 +260,7 @@ namespace DualPulse
         {
             string lastSet = null;
             bool forced = true;
+            DateTime lastProbe = DateTime.MinValue;
             while (running)
             {
                 if (rescan.WaitOne(3000)) forced = true;
@@ -267,10 +268,16 @@ namespace DualPulse
                 try
                 {
                     var all = HidDevice.Enumerate();
-                    // only probe when something was plugged / unplugged (probing pings devices)
+                    // Probe when something was plugged / unplugged, and retry every 15 s so a device
+                    // that was busy or unresponsive at startup (e.g. right after login) is picked up later.
                     string set = string.Join("|", all.Select(i => i.Path).OrderBy(p => p));
-                    if (!forced && set == lastSet) continue;
-                    lastSet = set; forced = false;
+                    if (!forced && set == lastSet && (DateTime.Now - lastProbe).TotalSeconds < 15) continue;
+                    lastSet = set; forced = false; lastProbe = DateTime.Now;
+
+                    // placeholders for unresponsive devices are re-probed every time
+                    var oldProblems = string.Join("|", Devices.Where(d => d.Problem != null).Select(d => d.Id).OrderBy(x => x));
+                    lock (devices) devices.RemoveAll(d => d.Problem != null);
+                    bool changed = false;
 
                     var claimed = new HashSet<string>();
                     foreach (var d in Devices)
@@ -278,15 +285,20 @@ namespace DualPulse
                         foreach (var p in d.Paths) claimed.Add(p);
                         if (d.HasLighting) claimed.Add(string.Format("lit:{0:X4}:{1:X4}", d.Vid, d.Pid));
                     }
-                    var added = new List<Device>();
+                    // publish each driver's devices as soon as it finishes, so one misbehaving
+                    // device can never hide the others
                     foreach (var drv in Drivers)
-                        foreach (var d in drv.Probe(all, claimed)) added.Add(d);
-                    if (added.Count > 0)
                     {
+                        var added = new List<Device>();
+                        try { foreach (var d in drv.Probe(all, claimed)) added.Add(d); }
+                        catch { }
+                        if (added.Count == 0) continue;
                         lock (devices) devices.AddRange(added);
-                        foreach (var d in added) Apply(d);
-                        if (DevicesChanged != null) DevicesChanged();
+                        foreach (var d in added.Where(x => x.Problem == null)) { Apply(d); changed = true; }
+                        if (changed && DevicesChanged != null) { DevicesChanged(); changed = false; }
                     }
+                    var newProblems = string.Join("|", Devices.Where(d => d.Problem != null).Select(d => d.Id).OrderBy(x => x));
+                    if (newProblems != oldProblems && DevicesChanged != null) DevicesChanged();
                 }
                 catch { }
             }

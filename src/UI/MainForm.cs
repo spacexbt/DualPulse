@@ -155,14 +155,14 @@ namespace DualPulse
         void RefreshStatus()
         {
             var devs = E.Devices;
-            var kb = devs.FirstOrDefault(d => d.Kind == DeviceKind.Keyboard);
-            var ms = devs.FirstOrDefault(d => d.Kind == DeviceKind.Mouse);
-            kbPill.Good = kb != null; mousePill.Good = ms != null;
+            var kb = devs.OrderBy(d => d.Problem != null).FirstOrDefault(d => d.Kind == DeviceKind.Keyboard);
+            var ms = devs.OrderBy(d => d.Problem != null).FirstOrDefault(d => d.Kind == DeviceKind.Mouse);
+            kbPill.Good = kb != null && kb.Problem == null; mousePill.Good = ms != null && ms.Problem == null;
             kbPill.Device = kb != null ? kb.Name : "Keyboard";
             mousePill.Device = ms != null ? ms.Name : "Mouse";
-            kbPill.Detail = kb == null ? "Not detected" : (E.Lit(kb) ? "Lighting: DualPulse" : kb.HasLighting ? "Lighting: onboard" : "Connected")
+            kbPill.Detail = kb == null ? "Not detected" : kb.Problem != null ? "Not responding: replug it" : (E.Lit(kb) ? "Lighting: DualPulse" : kb.HasLighting ? "Lighting: onboard" : "Connected")
                 + (Cached(E.PollNow, kb) > 0 ? "  •  " + Cached(E.PollNow, kb) + " Hz" : "");
-            mousePill.Detail = ms == null ? "Not detected" : (ms.Sensor != null && ms.Sensor.HasOnboardMode ? (E.Host(ms) ? "Live" : "Onboard") : "Connected")
+            mousePill.Detail = ms == null ? "Not detected" : ms.Problem != null ? "Not responding: replug it" : (ms.Sensor != null && ms.Sensor.HasOnboardMode ? (E.Host(ms) ? "Live" : "Onboard") : "Connected")
                 + (Cached(E.DpiNow, ms) > 0 ? "  •  " + Cached(E.DpiNow, ms) + " DPI" : "");
             kbPill.Invalidate(); mousePill.Invalidate();
             devCount.Text = "v1.0  •  " + devs.Length + (devs.Length == 1 ? " device" : " devices");

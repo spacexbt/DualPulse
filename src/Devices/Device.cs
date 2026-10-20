@@ -21,6 +21,7 @@ namespace DualPulse
         public float Aspect = 1f;                  // box width / height
         public KbLayout Layout;                    // optional key drawing for keyboards
         public volatile bool Alive = true;
+        public string Problem;                     // set when the device is present but not usable right now
         public Color[] Frame = new Color[0];       // last frame computed by the engine
 
         public virtual ISensor Sensor { get { return null; } }
@@ -42,6 +43,19 @@ namespace DualPulse
                 LampPos[i] = horizontal ? new PointF(k, 0.5f) : new PointF(0.5f, k);
             }
         }
+    }
+
+    // A device that is plugged in but does not answer its control protocol. It is listed so the user
+    // knows what is wrong, and re-probed on every scan so it recovers on its own once it responds.
+    public class UnresponsiveDevice : Device
+    {
+        public UnresponsiveDevice(HidInfo info, DeviceKind kind, string name, string driver, string problem)
+        {
+            Vid = info.Vid; Pid = info.Pid; Kind = kind; Name = name; Driver = driver; Problem = problem;
+            Id = string.Format("problem:{0:X4}:{1:X4}", Vid, Pid);
+        }
+        public override bool WriteLamps(Color[] colors) { return true; }
+        public override void Dispose() { }
     }
 
     // DPI / polling / onboard-profile control, typically a mouse.
